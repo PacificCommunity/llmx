@@ -1,0 +1,255 @@
+---
+title: "Getting Started with llmx"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{getting-started}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE  # Set to FALSE to avoid API calls during package check
+)
+```
+
+```{r setup}
+library(llmx)
+```
+
+# Introduction
+
+The **llmx** package provides tools for transforming diverse data sources into SDMX-CSV format using Large Language Models (LLMs). This vignette walks you through the basic workflow from data analysis to final SDMX-compliant output.
+
+## Prerequisites
+
+Before starting, you'll need:
+
+1. **OpenAI API Key**: Set your API key for LLM-powered features:
+   ```r
+   Sys.setenv(OPENAI_API_KEY = "your-api-key-here")
+   ```
+
+2. **Source data**: A CSV or Excel file with the data you want to transform.
+
+3. **Target SDMX structure**: Either a URL to an SDMX Data Structure Definition (DSD) or knowledge of the target SDMX format.
+
+## Basic Workflow
+
+The typical llmx workflow follows these steps:
+
+1. **Analyze** your source data structure
+2. **Extract** target SDMX metadata  
+3. **Generate** intelligent mapping suggestions
+4. **Create** transformation scripts using LLM
+5. **Execute** the transformation
+6. **Validate** the results
+
+Let's walk through each step with examples.
+
+## Step 1: Analyze Source Data
+
+First, analyze your source data to understand its structure:
+
+```{r analyze-data}
+# Example: Analyze a CSV file with economic indicators
+analysis <- analyze_data_structure("economic_data.csv")
+print(analysis)
+```
+
+This function provides:
+- Column types and statistics
+- Sample data preview
+- Identification of categorical vs. numeric columns
+- Missing value patterns
+
+## Step 2: Extract SDMX Metadata
+
+Next, get information about your target SDMX structure:
+
+```{r extract-sdmx}
+# Example: Get OECD Quarterly National Accounts structure
+sdmx_meta <- extract_dsd_metadata(
+  "https://stats.oecd.org/restsdmx/sdmx.ashx/GetDataStructure/QNA"
+)
+
+# Explore the structure
+print(sdmx_meta$dimensions)
+print(sdmx_meta$attributes)
+print(sdmx_meta$measures)
+```
+
+## Step 3: Generate Mapping Suggestions
+
+The package can automatically suggest mappings between your source columns and SDMX components:
+
+```{r suggest-mapping}
+suggestions <- suggest_sdmx_mapping(analysis, sdmx_meta)
+print(suggestions)
+```
+
+These suggestions are based on:
+- Column name similarity
+- Data type compatibility  
+- Content pattern matching
+
+## Step 4: Generate Transformation Script
+
+This is where the LLM magic happens. Generate a complete R script for your transformation:
+
+```{r generate-script}
+# Generate a transformation script
+script <- generate_mapping_script(
+  data_analysis = analysis,
+  target_sdmx = sdmx_meta,
+  mapping_type = "auto",  # Let the system decide complexity
+  output_file = "my_transformation.R"
+)
+
+# Preview the generated code
+cat(substr(script, 1, 1000), "...")  # Show first 1000 characters
+```
+
+The generated script includes:
+- Data cleaning and validation
+- Column mapping logic
+- Type conversions
+- Error handling
+- SDMX-CSV formatting
+
+## Step 5: Execute Transformation
+
+Run the generated transformation:
+
+```{r execute-transform}
+# Source the generated script
+source("my_transformation.R")
+
+# Load your data
+source_data <- readr::read_csv("economic_data.csv")
+
+# Transform to SDMX format
+sdmx_data <- transform_to_sdmx_csv(source_data)
+
+# Preview results
+head(sdmx_data)
+```
+
+## Step 6: Validate Results
+
+Finally, validate that your transformed data meets SDMX specifications:
+
+```{r validate}
+# Basic validation
+is_valid <- validate_sdmx_csv(sdmx_data, sdmx_meta)
+
+# Detailed validation with full report
+validation_result <- validate_sdmx_csv(
+  sdmx_data, 
+  sdmx_meta, 
+  return_details = TRUE
+)
+
+print(validation_result)
+```
+
+## Working with Different Data Formats
+
+### Wide Format Data
+
+For data with multiple indicator columns, use the wide-to-long template:
+
+```{r wide-format}
+# Example wide format data
+wide_data <- data.frame(
+  country = c("USA", "CAN", "MEX"),
+  year = c(2021, 2021, 2021),
+  gdp = c(23315.08, 1988.34, 1293.84),
+  population = c(331900000, 38000000, 128900000),
+  unemployment = c(5.3, 7.5, 4.4)
+)
+
+# Transform using the wide-to-long template
+source(system.file("templates/wide_to_long_template.R", package = "llmx"))
+
+sdmx_long <- transform_wide_to_sdmx_csv(
+  wide_data,
+  id_cols = c("country", "year"),
+  value_cols = c("gdp", "population", "unemployment"),
+  indicator_names = c(
+    "gdp" = "GDP", 
+    "population" = "POP",
+    "unemployment" = "UNEMP_RATE"
+  )
+)
+
+head(sdmx_long)
+```
+
+### Excel Files
+
+The package also works with Excel files:
+
+```{r excel-files}
+# Analyze Excel data
+excel_analysis <- analyze_data_structure("my_data.xlsx", sheet = "Data")
+
+# Rest of the workflow is the same...
+```
+
+## Customization Tips
+
+### Adjusting LLM Settings
+
+You can customize the LLM behavior:
+
+```{r llm-settings}
+# Use different models for different needs
+script_simple <- generate_mapping_script(
+  analysis, sdmx_meta,
+  model = "gpt-3.5-turbo",    # Faster, cheaper
+  mapping_type = "simple",     # For straightforward mappings
+  include_validation = FALSE   # Skip validation code
+)
+
+script_complex <- generate_mapping_script(
+  analysis, sdmx_meta,
+  model = "gpt-4",            # More capable
+  mapping_type = "complex",    # For complex transformations
+  include_validation = TRUE    # Include comprehensive validation
+)
+```
+
+### Manual Customization
+
+Always review and customize the generated scripts:
+
+1. **Check column mappings** - Verify that source columns are mapped to appropriate SDMX dimensions
+2. **Validate code lists** - Ensure categorical values match expected SDMX codes
+3. **Add business logic** - Include domain-specific transformation rules
+4. **Test with sample data** - Verify the transformation works correctly
+
+## Best Practices
+
+1. **Start simple**: Begin with basic transformations and gradually add complexity
+2. **Validate early**: Check data quality at each step
+3. **Document mappings**: Keep track of your transformation decisions
+4. **Test thoroughly**: Use sample data to verify transformations
+5. **Version control**: Save your transformation scripts for reproducibility
+
+## Next Steps
+
+- Explore the [Advanced Transformations](advanced-transformations.html) vignette for complex scenarios
+- Check out the [Templates Guide](templates.html) for ready-to-use transformation patterns
+- See [Validation and Quality Control](validation.html) for ensuring data quality
+
+## Getting Help
+
+If you encounter issues:
+
+1. Check the function documentation: `?function_name`
+2. Review error messages carefully - they often contain helpful suggestions
+3. Try the built-in templates as starting points
+4. File issues on the [GitHub repository](https://github.com/yourusername/llmx/issues)
