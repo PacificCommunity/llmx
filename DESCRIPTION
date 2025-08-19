@@ -52,3 +52,4 @@ Collate:
     'workflow.R'
     'advanced_mapping.R'
     'value_transformations.R'
+Remotes: git::https://github.com/edwindj/sdmxdata
