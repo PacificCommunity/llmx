@@ -12,7 +12,11 @@ LLM_PROVIDERS <- list(
   OPENAI = "openai",
   ANTHROPIC = "anthropic", 
   OLLAMA = "ollama",
-  AZURE_OPENAI = "azure_openai"
+  AZURE_OPENAI = "azure_openai",
+  GEMINI = "gemini",
+  DEEPSEEK = "deepseek",
+  GROQ = "groq",
+  GITHUB = "github"
 )
 
 #' Create LLM Configuration
@@ -22,12 +26,13 @@ LLM_PROVIDERS <- list(
 #'
 #' @param provider Character. LLM provider type (see LLM_PROVIDERS)
 #' @param model Character. Model name/identifier
-#' @param api_key Character. API key (if required by provider)
-#' @param base_url Character. Base URL for API (used by Ollama and Azure)
+#' @param api_key Character. API key (if required by provider). If NULL, will try to load from environment or .env file
+#' @param base_url Character. Base URL for API (used by Ollama, Azure, and Gemini)
 #' @param api_version Character. API version (used by Azure OpenAI)
 #' @param temperature Numeric. Sampling temperature (0-1, default: 0.1)
 #' @param max_tokens Integer. Maximum tokens in response (default: 2000)
 #' @param timeout_seconds Integer. Request timeout in seconds (default: 120)
+#' @param env_file Character. Path to .env file to load API keys from (optional)
 #'
 #' @return LLM configuration object
 #' @export
@@ -53,6 +58,19 @@ LLM_PROVIDERS <- list(
 #'   model = "claude-3-sonnet-20240229",
 #'   api_key = Sys.getenv("ANTHROPIC_API_KEY")
 #' )
+#' 
+#' # Gemini configuration with automatic .env loading
+#' gemini_config <- create_llm_config(
+#'   provider = "gemini",
+#'   model = "gemini-1.5-flash"
+#' )
+#' 
+#' # Gemini configuration with specific .env file
+#' gemini_config <- create_llm_config(
+#'   provider = "gemini",
+#'   model = "gemini-1.5-flash",
+#'   env_file = "path/to/.env"
+#' )
 #' }
 create_llm_config <- function(provider,
                              model,
@@ -61,7 +79,24 @@ create_llm_config <- function(provider,
                              api_version = NULL,
                              temperature = 0.1,
                              max_tokens = 2000,
-                             timeout_seconds = 120) {
+                             timeout_seconds = 120,
+                             env_file = NULL) {
+  
+  # Load .env file if provided
+  if (!is.null(env_file)) {
+    load_env(env_file, verbose = FALSE)
+  } else {
+    # Try to load from common .env locations if no api_key provided
+    if (is.null(api_key)) {
+      # Try current directory first, then parent directory
+      for (env_path in c(".env", "../.env", "../../.env")) {
+        if (file.exists(env_path)) {
+          load_env(env_path, verbose = FALSE)
+          break
+        }
+      }
+    }
+  }
   
   # Validate provider
   if (!provider %in% unlist(LLM_PROVIDERS)) {
@@ -146,6 +181,83 @@ create_llm_config <- function(provider,
         max_tokens = max_tokens,
         timeout_seconds = timeout_seconds
       )
+    },
+    
+    "gemini" = {
+      if (is.null(api_key)) {
+        api_key <- Sys.getenv("GEMINI_API_KEY")
+        if (api_key == "") {
+          cli::cli_abort("Gemini API key required. Set GEMINI_API_KEY environment variable or provide api_key parameter.")
+        }
+      }
+      if (is.null(base_url)) base_url <- "https://generativelanguage.googleapis.com/v1beta"
+      
+      list(
+        provider = provider,
+        model = model,
+        api_key = api_key,
+        base_url = base_url,
+        temperature = temperature,
+        max_tokens = max_tokens,
+        timeout_seconds = timeout_seconds
+      )
+    },
+    
+    "deepseek" = {
+      if (is.null(api_key)) {
+        api_key <- Sys.getenv("DEEPSEEK_API_KEY")
+        if (api_key == "") {
+          cli::cli_abort("DeepSeek API key required. Set DEEPSEEK_API_KEY environment variable or provide api_key parameter.")
+        }
+      }
+      
+      list(
+        provider = provider,
+        model = model,
+        api_key = api_key,
+        base_url = base_url,
+        temperature = temperature,
+        max_tokens = max_tokens,
+        timeout_seconds = timeout_seconds
+      )
+    },
+    
+    "groq" = {
+      if (is.null(api_key)) {
+        api_key <- Sys.getenv("GROQ_API_KEY")
+        if (api_key == "") {
+          cli::cli_abort("Groq API key required. Set GROQ_API_KEY environment variable or provide api_key parameter.")
+        }
+      }
+      
+      list(
+        provider = provider,
+        model = model,
+        api_key = api_key,
+        base_url = base_url,
+        temperature = temperature,
+        max_tokens = max_tokens,
+        timeout_seconds = timeout_seconds
+      )
+    },
+    
+    "github" = {
+      if (is.null(api_key)) {
+        api_key <- Sys.getenv("GITHUB_TOKEN")
+        if (api_key == "") {
+          cli::cli_abort("GitHub token required. Set GITHUB_TOKEN environment variable or provide api_key parameter.")
+        }
+      }
+      
+      list(
+        provider = provider,
+        model = model,
+        api_key = api_key,
+        base_url = base_url,
+        temperature = temperature,
+        max_tokens = max_tokens,
+        timeout_seconds = timeout_seconds
+      )
     }
   )
   
@@ -191,118 +303,131 @@ query_llm <- function(config, system_prompt, user_prompt, context = NULL) {
   
   cli::cli_inform("Querying {.val {config$provider}} model: {.val {config$model}}")
   
+  # Try ellmer first for supported providers (excluding Gemini for now)
+  if (config$provider %in% c("openai", "anthropic", "ollama", "deepseek", "groq", "github") && 
+      "ellmer" %in% rownames(installed.packages())) {
+    
+    tryCatch({
+      response <- query_with_ellmer(config, system_prompt, full_prompt)
+      return(response)
+    }, error = function(e) {
+      cli::cli_warn("ellmer failed ({e$message}), falling back to direct API calls")
+    })
+  }
+  
+  # Fallback to direct API calls
   response <- switch(config$provider,
     "openai" = query_openai(config, system_prompt, full_prompt),
     "anthropic" = query_anthropic(config, system_prompt, full_prompt),
     "ollama" = query_ollama(config, system_prompt, full_prompt),
     "azure_openai" = query_azure_openai(config, system_prompt, full_prompt),
+    "gemini" = query_gemini(config, system_prompt, full_prompt),
     stop("Unsupported provider: ", config$provider)
   )
   
   return(response)
 }
 
-#' Enhanced Script Generation with Multiple Providers
-#'
-#' Enhanced version of generate_mapping_script that supports multiple LLM providers.
-#'
-#' @param data_analysis Result from `analyze_data_structure()`
-#' @param target_sdmx Target SDMX metadata from `extract_dsd_metadata()`
-#' @param llm_config LLM configuration from `create_llm_config()`
-#' @param mapping_type Character. Type of mapping: "simple", "complex", or "auto" (default)
-#' @param include_validation Logical. Include data validation in generated script (default: TRUE)
-#' @param output_file Character. Optional file path to save generated script
-#'
-#' @return Character string containing the generated R script
-#' @export
-#' @examples
-#' \dontrun{
-#' # With different providers
-#' config <- create_llm_config("ollama", "llama2")
-#' script <- generate_mapping_script_enhanced(data_analysis, target_sdmx, config)
-#' }
-generate_mapping_script_enhanced <- function(data_analysis,
-                                           target_sdmx,
-                                           llm_config,
-                                           mapping_type = c("auto", "simple", "complex"),
-                                           include_validation = TRUE,
-                                           output_file = NULL) {
-  
-  if (!inherits(llm_config, "llmx_llm_config")) {
-    cli::cli_abort("llm_config must be created with {.fn create_llm_config}")
-  }
-  
-  mapping_type <- match.arg(mapping_type)
-  
-  # Validate inputs
-  if (!inherits(data_analysis, "llmx_data_analysis")) {
-    cli::cli_abort("data_analysis must be from {.fn analyze_data_structure}")
-  }
-  
-  if (!inherits(target_sdmx, "llmx_sdmx_metadata")) {
-    cli::cli_abort("target_sdmx must be from {.fn extract_dsd_metadata}")
-  }
-  
-  # Auto-determine mapping complexity if needed
-  if (mapping_type == "auto") {
-    complexity_indicators <- c(
-      data_analysis$n_cols > 10,
-      nrow(target_sdmx$dimensions) > 5,
-      any(data_analysis$columns$is_categorical & data_analysis$columns$unique_count > 50)
-    )
-    mapping_type <- if (sum(complexity_indicators) >= 2) "complex" else "simple"
-    cli::cli_inform("Auto-detected mapping type: {.val {mapping_type}}")
-  }
-  
-  # Create system prompt based on mapping type
-  system_prompt <- create_system_prompt_enhanced(mapping_type, include_validation)
-  
-  # Create detailed user prompt
-  user_prompt <- create_mapping_prompt_enhanced(data_analysis, target_sdmx, mapping_type)
-  
-  cli::cli_inform("Generating mapping script with {.val {llm_config$provider}}...")
-  
-  # Generate code using LLM
-  tryCatch({
-    response <- query_llm(llm_config, system_prompt, user_prompt)
-    
-    # Extract R code from response
-    script_code <- extract_code_from_response(response)
-    
-    # Add header and metadata
-    final_script <- create_complete_script_enhanced(script_code, data_analysis, target_sdmx, llm_config)
-    
-    # Save to file if requested
-    if (!is.null(output_file)) {
-      writeLines(final_script, output_file)
-      cli::cli_inform("Mapping script saved to: {.path {output_file}}")
-    }
-    
-    cli::cli_inform("✓ Mapping script generated successfully")
-    return(final_script)
-    
-  }, error = function(e) {
-    cli::cli_abort(c(
-      "Failed to generate mapping script",
-      "x" = "Error: {e$message}",
-      "i" = "Check your {llm_config$provider} configuration and connection"
-    ))
-  })
-}
 
 #' Get Required Packages for Provider
 #' @keywords internal
 get_required_packages <- function(provider) {
-  switch(provider,
-    "openai" = "httr2",
-    "anthropic" = "httr2",  
-    "ollama" = "httr2",
-    "azure_openai" = "httr2",
-    character()
+  # Try ellmer first for most providers, use httr2 for Gemini and others
+  if (provider %in% c("openai", "anthropic", "ollama")) {
+    return("ellmer")
+  } else {
+    return("httr2")
+  }
+}
+
+#' Query LLM using ellmer package
+#' @keywords internal
+query_with_ellmer <- function(config, system_prompt, user_prompt) {
+  
+  # ellmer handles API keys directly via parameters, but set env vars as backup
+  # Based on ellmer/R/provider-google.R lines 591-594
+  if (config$provider == "gemini" && !is.null(config$api_key)) {
+    # ellmer checks GOOGLE_API_KEY then GEMINI_API_KEY
+    if (Sys.getenv("GOOGLE_API_KEY") == "") {
+      Sys.setenv(GOOGLE_API_KEY = config$api_key)
+    }
+  }
+  
+  # Create ellmer chat object based on provider using standardized pattern
+  chat <- switch(config$provider,
+    "openai" = ellmer::chat_openai(
+      system_prompt = system_prompt,
+      model = config$model,
+      api_key = config$api_key,
+      params = list(
+        temperature = config$temperature,
+        max_tokens = config$max_tokens
+      )
+    ),
+    "anthropic" = ellmer::chat_anthropic(
+      system_prompt = system_prompt,
+      model = config$model,
+      api_key = config$api_key,
+      params = list(
+        temperature = config$temperature,
+        max_tokens = config$max_tokens
+      )
+    ),
+    "gemini" = ellmer::chat_google_gemini(
+      system_prompt = system_prompt,
+      model = config$model,
+      api_key = config$api_key,
+      base_url = if (!is.null(config$base_url)) config$base_url else NULL,
+      params = ellmer::params(
+        temperature = config$temperature,
+        max_tokens = config$max_tokens
+      )
+    ),
+    "ollama" = ellmer::chat_ollama(
+      system_prompt = system_prompt,
+      model = config$model,
+      base_url = if (!is.null(config$base_url)) config$base_url else NULL,
+      params = list(
+        temperature = config$temperature
+      )
+    ),
+    "deepseek" = ellmer::chat_deepseek(
+      system_prompt = system_prompt,
+      model = config$model,
+      api_key = config$api_key,
+      params = list(
+        temperature = config$temperature,
+        max_tokens = config$max_tokens
+      )
+    ),
+    "groq" = ellmer::chat_groq(
+      system_prompt = system_prompt,
+      model = config$model,
+      api_key = config$api_key,
+      params = list(
+        temperature = config$temperature,
+        max_tokens = config$max_tokens
+      )
+    ),
+    "github" = ellmer::chat_github(
+      system_prompt = system_prompt,
+      model = config$model,
+      api_key = config$api_key,
+      params = list(
+        temperature = config$temperature,
+        max_tokens = config$max_tokens
+      )
+    ),
+    stop("Provider not supported by ellmer: ", config$provider)
   )
+  
+  # Send the user prompt and get response
+  response <- chat$chat(user_prompt)
+  return(response)
 }
 
 #' Query OpenAI API
+#' @importFrom utils installed.packages
 #' @keywords internal
 query_openai <- function(config, system_prompt, user_prompt) {
   
@@ -445,13 +570,85 @@ query_azure_openai <- function(config, system_prompt, user_prompt) {
   return(result$choices[[1]]$message$content)
 }
 
-#' Create Enhanced System Prompt
+#' Query Gemini API
 #' @keywords internal
-create_system_prompt_enhanced <- function(mapping_type, include_validation) {
+query_gemini <- function(config, system_prompt, user_prompt) {
+  
+  # Gemini API endpoint format
+  url <- paste0(
+    config$base_url,
+    "/models/",
+    config$model,
+    ":generateContent?key=",
+    config$api_key
+  )
+  
+  # Gemini API uses separate systemInstruction field (like ellmer does)
+  req <- httr2::request(url) |>
+    httr2::req_headers("Content-Type" = "application/json") |>
+    httr2::req_body_json(list(
+      contents = list(
+        list(
+          parts = list(
+            list(text = user_prompt)
+          )
+        )
+      ),
+      systemInstruction = list(
+        parts = list(
+          list(text = system_prompt)
+        )
+      ),
+      generationConfig = list(
+        temperature = config$temperature,
+        maxOutputTokens = config$max_tokens
+      )
+    )) |>
+    httr2::req_timeout(config$timeout_seconds)
+  
+  resp <- httr2::req_perform(req)
+  
+  if (httr2::resp_status(resp) != 200) {
+    resp_text <- httr2::resp_body_string(resp)
+    stop("HTTP ", httr2::resp_status(resp), " ", httr2::resp_status_desc(resp), ": ", resp_text)
+  }
+  
+  result <- httr2::resp_body_json(resp)
+  
+  if (!is.null(result$error)) {
+    stop("Gemini API error: ", result$error$message)
+  }
+  
+  # Extract content from Gemini response based on ellmer source code
+  # Reference: ellmer/R/provider-google.R line 265
+  if ("candidates" %in% names(result) && length(result$candidates) > 0) {
+    candidate <- result$candidates[[1]]
+    
+    if ("content" %in% names(candidate) && 
+        "parts" %in% names(candidate$content) &&
+        length(candidate$content$parts) > 0 &&
+        "text" %in% names(candidate$content$parts[[1]])) {
+      return(candidate$content$parts[[1]]$text)
+    }
+  }
+  
+  # If extraction failed, return error
+  stop("Failed to extract text from Gemini response")
+}
+
+#' Create System Prompt for SDMX Mapping
+#' @keywords internal
+create_system_prompt <- function(mapping_type, include_validation) {
   
   base_prompt <- "You are an expert R programmer specializing in statistical data transformation and SDMX standards. 
 
 Your task is to generate clean, efficient, and well-documented R code that transforms source data into SDMX-CSV format.
+
+IMPORTANT OUTPUT FORMAT:
+- Respond with ONLY the R code and necessary comments
+- Do NOT include thinking process, explanations, or reasoning tags like <think>, <thinking>, etc.
+- Do NOT include introductory text like 'Here is the code:' or similar
+- Start directly with the R function definition
 
 Key requirements:
 - Use modern tidyverse functions and the native pipe operator |>
@@ -477,22 +674,22 @@ Key requirements:
   paste0(base_prompt, complexity_additions, validation_addition)
 }
 
-#' Create Enhanced Mapping Prompt
+#' Create Detailed SDMX Mapping Prompt
 #' @keywords internal
-create_mapping_prompt_enhanced <- function(data_analysis, target_sdmx, mapping_type) {
+create_mapping_prompt <- function(data_analysis, target_sdmx, mapping_type) {
   
   # Prepare source data description
   source_desc <- glue::glue("
   SOURCE DATA ANALYSIS:
   File: {data_analysis$file_path}
   Type: {data_analysis$file_type} 
-  Dimensions: {data_analysis$n_rows} rows × {data_analysis$n_cols} columns
+  Dimensions: {data_analysis$n_rows} rows \u00d7 {data_analysis$n_cols} columns
   
   Column Information:
-  {format_columns_for_prompt_enhanced(data_analysis$columns)}
+  {format_columns_for_prompt(data_analysis$columns)}
   
   Sample Data:
-  {format_sample_data_for_prompt_enhanced(data_analysis$sample_data)}
+  {format_sample_data_for_prompt(data_analysis$sample_data)}
   ")
   
   # Prepare target SDMX description
@@ -502,13 +699,13 @@ create_mapping_prompt_enhanced <- function(data_analysis, target_sdmx, mapping_t
   Agency: {target_sdmx$agency_id}
   
   Required Dimensions:
-  {format_sdmx_components_for_prompt_enhanced(target_sdmx$dimensions, 'dimension')}
+  {format_sdmx_components_for_prompt(target_sdmx$dimensions, 'dimension')}
   
   Attributes:
-  {format_sdmx_components_for_prompt_enhanced(target_sdmx$attributes, 'attribute')}
+  {format_sdmx_components_for_prompt(target_sdmx$attributes, 'attribute')}
   
   Measures:
-  {format_sdmx_components_for_prompt_enhanced(target_sdmx$measures, 'measure')}
+  {format_sdmx_components_for_prompt(target_sdmx$measures, 'measure')}
   ")
   
   main_prompt <- glue::glue("
@@ -537,9 +734,9 @@ create_mapping_prompt_enhanced <- function(data_analysis, target_sdmx, mapping_t
   main_prompt
 }
 
-#' Format Columns for Enhanced Prompt
+#' Format Columns for LLM Prompt
 #' @keywords internal
-format_columns_for_prompt_enhanced <- function(columns_df) {
+format_columns_for_prompt <- function(columns_df) {
   if (nrow(columns_df) == 0) return("No columns found")
   
   columns_df |>
@@ -550,9 +747,9 @@ format_columns_for_prompt_enhanced <- function(columns_df) {
     paste(collapse = "\n  ")
 }
 
-#' Format Sample Data for Enhanced Prompt
+#' Format Sample Data for LLM Prompt
 #' @keywords internal
-format_sample_data_for_prompt_enhanced <- function(sample_data) {
+format_sample_data_for_prompt <- function(sample_data) {
   if (nrow(sample_data) == 0) return("No sample data available")
   
   # Convert to character and truncate long values
@@ -562,31 +759,75 @@ format_sample_data_for_prompt_enhanced <- function(sample_data) {
       ifelse(nchar(char_vals) > 50, paste0(substr(char_vals, 1, 47), "..."), char_vals)
     }))
   
-  utils::capture.output(print(sample_formatted, n = 5)) |>
+  utils::capture.output(print(head(sample_formatted, 5))) |>
     paste(collapse = "\n  ")
 }
 
-#' Format SDMX Components for Enhanced Prompt
+#' Format SDMX Components for LLM Prompt
 #' @keywords internal
-format_sdmx_components_for_prompt_enhanced <- function(components_df, type) {
+format_sdmx_components_for_prompt <- function(components_df, type) {
   if (nrow(components_df) == 0) return(paste("No", type, "components found"))
   
-  components_df |>
-    dplyr::mutate(
-      description = dplyr::case_when(
-        type == "dimension" ~ glue::glue("{id} (concept: {concept_ref}, codelist: {codelist})"),
-        type == "attribute" ~ glue::glue("{id} (concept: {concept_ref}, level: {attachment_level})"),
-        type == "measure" ~ glue::glue("{id} (concept: {concept_ref})"),
-        TRUE ~ id
-      )
-    ) |>
-    dplyr::pull(description) |>
-    paste(collapse = "\n  ")
+  format_component <- function(row_idx) {
+    row <- components_df[row_idx, ]
+    name_info <- if (!is.na(row$name)) row$name else row$id
+    
+    # Format codes information with actual examples
+    codes_info <- if ("codes" %in% names(components_df) && !is.null(row$codes[[1]])) {
+      codes_df <- row$codes[[1]]
+      total_codes <- nrow(codes_df)
+      
+      if (total_codes > 0) {
+        # Show first few codes as examples
+        examples_count <- min(5, total_codes)
+        examples <- codes_df$id[1:examples_count]
+        examples_names <- codes_df$name[1:examples_count]
+        
+        # Create examples string
+        examples_str <- paste(
+          sapply(1:examples_count, function(i) {
+            name_part <- if (!is.na(examples_names[i])) paste0(" (", examples_names[i], ")") else ""
+            paste0(examples[i], name_part)
+          }), 
+          collapse = ", "
+        )
+        
+        if (total_codes > examples_count) {
+          paste0(examples_str, ", ... (", total_codes, " total codes)")
+        } else {
+          examples_str
+        }
+      } else {
+        "no codes available"
+      }
+    } else {
+      "codes: unknown"
+    }
+    
+    # Build description based on type
+    if (type == "dimension") {
+      glue::glue("{row$id}: {name_info}\n      Codes: {codes_info}")
+    } else if (type == "attribute") {
+      format_info <- if ("text_format" %in% names(components_df) && !is.na(row$text_format)) {
+        paste("format:", row$text_format)
+      } else "format: unknown"
+      glue::glue("{row$id}: {name_info} ({format_info})\n      Codes: {codes_info}")
+    } else { # measure
+      format_info <- if ("text_format" %in% names(components_df) && !is.na(row$text_format)) {
+        paste("format:", row$text_format)
+      } else "format: unknown"
+      glue::glue("{row$id}: {name_info} ({format_info})")
+    }
+  }
+  
+  # Apply formatting to each row
+  descriptions <- sapply(1:nrow(components_df), format_component)
+  paste(descriptions, collapse = "\n  ")
 }
 
-#' Create Complete Script with Enhanced Header
+#' Create Complete Script with Header and Metadata
 #' @keywords internal
-create_complete_script_enhanced <- function(script_code, data_analysis, target_sdmx, llm_config) {
+create_complete_script <- function(script_code, data_analysis, target_sdmx, llm_config) {
   
   header <- glue::glue("
   # SDMX Data Transformation Script
@@ -648,15 +889,15 @@ test_llm_connection <- function(config) {
     success <- grepl("Connection test successful", response, ignore.case = TRUE)
     
     if (success) {
-      cli::cli_inform("✓ {config$provider} connection successful")
+      cli::cli_inform("\u2713 {config$provider} connection successful")
     } else {
-      cli::cli_warn("⚠ {config$provider} connection may have issues - unexpected response")
+      cli::cli_warn("\u26a0 {config$provider} connection may have issues - unexpected response")
     }
     
     return(success)
     
   }, error = function(e) {
-    cli::cli_abort("✗ {config$provider} connection failed: {e$message}")
+    cli::cli_abort("\u2717 {config$provider} connection failed: {e$message}")
     return(FALSE)
   })
 }
@@ -677,7 +918,7 @@ print.llmx_llm_config <- function(x, ...) {
     masked_key <- paste0(substr(x$api_key, 1, 8), "...")
     cli::cli_text("API Key: {.val {masked_key}}")
   } else {
-    cli::cli_text("API Key: {.val {None (not required)}}")
+    cli::cli_text("API Key: {.val {'None (not required)'}}")
   }
   
   invisible(x)

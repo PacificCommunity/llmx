@@ -67,7 +67,7 @@ generate_value_transformations <- function(mapping_result,
     source_values <- source_data[[source_col]]
     
     # Get target column information
-    target_info <- get_target_column_info_enhanced(target_col, target_sdmx)
+    target_info <- get_target_column_info(target_col, target_sdmx)
     
     if (is.null(target_info)) next
     
@@ -693,7 +693,7 @@ calculate_transformation_complexity_score <- function(transformation_suggestions
 
 #' Get Enhanced Target Column Information
 #' @keywords internal
-get_target_column_info_enhanced <- function(target_col, target_sdmx) {
+get_target_column_info <- function(target_col, target_sdmx) {
   
   # Check dimensions
   if (nrow(target_sdmx$dimensions) > 0) {

@@ -1,3 +1,8 @@
+# Global variables used in NSE contexts
+utils::globalVariables(c("is_categorical", "column", "is_numeric", "statistic", "value", "metric",
+                         "type", "unique_count", "overall_score", "source_column", 
+                         "target_id", "target_type", "target_concept"))
+
 #' Analyze Data Structure for SDMX Mapping
 #'
 #' Analyzes the structure of a data file (CSV, Excel) to understand its format
@@ -12,6 +17,11 @@
 #' @param detect_hierarchies Logical. Detect hierarchical relationships (default: TRUE).
 #' @param detect_temporal_patterns Logical. Detect temporal patterns (default: TRUE).
 #' @param quality_assessment Logical. Perform data quality assessment (default: TRUE).
+#'
+#' @importFrom rlang .data
+#' @import dplyr  
+#' @import tidyr
+#' @importFrom stats median
 #'
 #' @return A list containing:
 #'   - `columns`: Data frame with enhanced column information
@@ -62,31 +72,19 @@ analyze_data_structure <- function(file_path,
   }
   
   # Analyze column structure
-  columns_info <- data |>
-    dplyr::summarise(
-      dplyr::across(dplyr::everything(), list(
-        type = ~ class(.x)[1],
-        na_count = ~ sum(is.na(.x)),
-        unique_count = ~ dplyr::n_distinct(.x, na.rm = TRUE)
-      )),
-      .groups = "drop"
-    ) |>
-    tidyr::pivot_longer(
-      cols = dplyr::everything(),
-      names_to = c("column", "metric"),
-      names_sep = "_(?=type|na_count|unique_count)$",
-      values_to = "value"
-    ) |>
-    tidyr::pivot_wider(
-      names_from = metric,
-      values_from = value
-    ) |>
-    dplyr::mutate(
-      na_proportion = as.numeric(na_count) / nrow(data),
-      is_categorical = unique_count <= 20 & type %in% c("character", "factor"),
-      is_numeric = type %in% c("numeric", "double", "integer"),
-      is_date = type %in% c("Date", "POSIXct", "POSIXt")
+  columns_info <- purrr::map_dfr(names(data), function(col_name) {
+    col_data <- data[[col_name]]
+    tibble::tibble(
+      column = col_name,
+      type = class(col_data)[1],
+      na_count = sum(is.na(col_data)),
+      unique_count = dplyr::n_distinct(col_data, na.rm = TRUE),
+      na_proportion = sum(is.na(col_data)) / nrow(data),
+      is_categorical = dplyr::n_distinct(col_data, na.rm = TRUE) <= 20 & class(col_data)[1] %in% c("character", "factor"),
+      is_numeric = class(col_data)[1] %in% c("numeric", "double", "integer"),
+      is_date = class(col_data)[1] %in% c("Date", "POSIXct", "POSIXt")
     )
+  })
   
   # Get sample unique values for categorical columns
   categorical_cols <- columns_info |>
@@ -136,19 +134,19 @@ analyze_data_structure <- function(file_path,
   
   # Enhanced profiling features
   temporal_patterns <- if (detect_temporal_patterns) {
-    detect_temporal_patterns_enhanced(data, columns_info)
+    detect_temporal_patterns(data, columns_info)
   } else {
     list()
   }
   
   hierarchical_relationships <- if (detect_hierarchies) {
-    detect_hierarchical_relationships_enhanced(data, columns_info)
+    detect_hierarchical_relationships(data, columns_info)
   } else {
     list()
   }
   
   data_quality <- if (quality_assessment) {
-    assess_data_quality_enhanced(data, columns_info)
+    assess_data_quality(data, columns_info)
   } else {
     list()
   }
@@ -179,10 +177,10 @@ analyze_data_structure <- function(file_path,
 #' @param ... Additional arguments (unused)
 #' @export
 print.llmx_data_analysis <- function(x, ...) {
-  cli::cli_h1("Enhanced Data Structure Analysis")
+  cli::cli_h1("Data Structure Analysis")
   cli::cli_text("File: {.path {x$file_path}}")
   cli::cli_text("Type: {.val {x$file_type}}")
-  cli::cli_text("Dimensions: {.val {x$n_rows}} rows × {.val {x$n_cols}} columns")
+  cli::cli_text("Dimensions: {.val {x$n_rows}} rows \u00d7 {.val {x$n_cols}} columns")
   
   # SDMX Readiness Assessment
   if (!is.null(x$sdmx_readiness) && length(x$sdmx_readiness) > 0) {
@@ -196,7 +194,14 @@ print.llmx_data_analysis <- function(x, ...) {
   }
   
   cli::cli_h2("Column Summary")
-  print(x$columns)
+  cli::cli_text("Columns: {.val {nrow(x$columns)}} analyzed")
+  cli::cli_text("Types: {paste(unique(x$columns$type), collapse = ', ')}")
+  if (any(x$columns$is_categorical)) {
+    cli::cli_text("Categorical: {.val {sum(x$columns$is_categorical)}}")
+  }
+  if (any(x$columns$is_numeric)) {
+    cli::cli_text("Numeric: {.val {sum(x$columns$is_numeric)}}")
+  }
   
   # Data Quality Summary
   if (!is.null(x$data_quality) && length(x$data_quality) > 0) {
@@ -254,7 +259,7 @@ print.llmx_data_analysis <- function(x, ...) {
 #'
 #' @return List with temporal pattern analysis
 #' @keywords internal
-detect_temporal_patterns_enhanced <- function(data, columns_info) {
+detect_temporal_patterns <- function(data, columns_info) {
   
   temporal_patterns <- list(
     temporal_columns = character(),
@@ -336,7 +341,7 @@ detect_temporal_patterns_enhanced <- function(data, columns_info) {
 #'
 #' @return List with hierarchical relationship analysis
 #' @keywords internal
-detect_hierarchical_relationships_enhanced <- function(data, columns_info) {
+detect_hierarchical_relationships <- function(data, columns_info) {
   
   hierarchical_analysis <- list(
     potential_hierarchies = list(),
@@ -454,7 +459,7 @@ check_hierarchical_nesting <- function(parent_col, child_col) {
 #'
 #' @return List with data quality assessment
 #' @keywords internal
-assess_data_quality_enhanced <- function(data, columns_info) {
+assess_data_quality <- function(data, columns_info) {
   
   quality_assessment <- list(
     overall_score = 0.0,

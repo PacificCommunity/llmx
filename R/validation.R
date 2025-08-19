@@ -179,26 +179,26 @@ validate_data_structure <- function(data, sdmx_metadata) {
 print.llmx_validation_result <- function(x, ...) {
   cli::cli_h1("SDMX-CSV Validation Results")
   
-  status_icon <- if (x$is_valid) "✓" else "✗"
+  status_icon <- if (x$is_valid) "\u2713" else "\u2717"
   status_color <- if (x$is_valid) "green" else "red"
   
-  cli::cli_text("{.{status_color} {status_icon}} Overall Status: {if (x$is_valid) 'VALID' else 'INVALID'}")
-  cli::cli_text("Data: {.val {x$n_rows}} rows × {.val {x$n_cols}} columns")
+  cli::cli_text("{status_icon} Overall Status: {if (x$is_valid) 'VALID' else 'INVALID'}")
+  cli::cli_text("Data: {.val {x$n_rows}} rows \u00d7 {.val {x$n_cols}} columns")
   cli::cli_text("Validated: {.timestamp {x$validated_at}}")
   
   if (length(x$issues) > 0) {
     cli::cli_h2("Issues Found")
     purrr::walk(x$issues, ~ {
-      icon <- if (.x$severity == "error") "✗" else "!"
+      icon <- if (.x$severity == "error") "\u2717" else "!"
       color <- if (.x$severity == "error") "red" else "yellow"
-      cli::cli_text("{.{color} {icon}} {.x$message}")
+      cli::cli_text("{icon} {(.x$message)}")
     })
   }
   
   if (length(x$warnings) > 0) {
     cli::cli_h2("Warnings")
     purrr::walk(x$warnings, ~ {
-      cli::cli_text("{.yellow !} {.x$message}")
+      cli::cli_text("! {(.x$message)}")
     })
   }
   

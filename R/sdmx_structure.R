@@ -1,131 +1,164 @@
+#' Auto-detect SDMX endpoint from agency ID
+#' 
+#' @param agency_id Character. Agency identifier
+#' @return SDMXEndpoint object or NULL if no match found
+#' @keywords internal
+auto_detect_endpoint <- function(agency_id) {
+  # Load available endpoints
+  endpoints_data <- sdmxdata::endpoints
+  
+  # Direct match first
+  if (agency_id %in% endpoints_data$id) {
+    return(sdmxdata::get_endpoint(agency_id))
+  }
+  
+  # Pattern matching for complex agency IDs (e.g., OECD.ELS.JAI -> OECD)
+  for (i in seq_len(nrow(endpoints_data))) {
+    endpoint_id <- endpoints_data$id[i]
+    # Check if agency_id starts with the endpoint id (case insensitive)
+    if (grepl(paste0("^", endpoint_id), agency_id, ignore.case = TRUE)) {
+      return(sdmxdata::get_endpoint(endpoint_id))
+    }
+  }
+  
+  return(NULL)
+}
+
 #' Extract SDMX Data Structure Definition Metadata
 #'
 #' Extracts metadata from an SDMX Data Structure Definition (DSD) including
-#' dimensions, attributes, measures, and codelists.
+#' dimensions, attributes, measures, and codelists using the sdmxdata package.
 #'
-#' @param dsd_url Character. URL to the SDMX DSD.
+#' @param endpoint Character. SDMX endpoint URL or endpoint object.
+#' @param agency_id Character. Agency identifier (e.g., "OECD").
+#' @param dataflow_id Character. Dataflow identifier (e.g., "QNA").
+#' @param version Character. Version of the dataflow (default: "latest").
 #' @param cache Logical. Whether to cache the DSD locally (default: TRUE).
 #'
 #' @return A list containing:
-#'   - `dimensions`: Data frame with dimension information
+#'   - `dimensions`: Data frame with dimension information including codes
 #'   - `attributes`: Data frame with attribute information  
 #'   - `measures`: Data frame with measure information
 #'   - `dsd_id`: DSD identifier
 #'   - `agency_id`: Agency identifier
-#'   - `codelists`: List of available codelists
+#'   - `name`: Dataflow name
+#'   - `description`: Dataflow description
+#'   - `raw_structure`: Complete sdmxdata structure object
 #'
 #' @export
 #' @examples
 #' \dontrun{
-#' # Extract OECD QNA structure
-#' qna_meta <- extract_dsd_metadata(
-#'   "https://stats.oecd.org/restsdmx/sdmx.ashx/GetDataStructure/QNA"
+#' # Extract Pacific Data Hub trade structure
+#' trade_meta <- extract_dsd_metadata(
+#'   endpoint = "https://stats-sdmx-disseminate.pacificdata.org/rest",
+#'   agency_id = "SPC",
+#'   dataflow_id = "DF_TRADE_FOOD",
+#'   version = "2.0"
 #' )
-#' print(qna_meta$dimensions)
+#' print(trade_meta$dimensions)
 #' }
-extract_dsd_metadata <- function(dsd_url, cache = TRUE) {
+extract_dsd_metadata <- function(endpoint = NULL, agency_id, dataflow_id, version = "latest", cache = TRUE) {
   
-  check_packages("rsdmx")
+  check_packages("sdmxdata")
   
-  cli::cli_inform("Fetching DSD from: {.url {dsd_url}}")
+  cli::cli_inform("Fetching DSD for: {agency_id}:{dataflow_id}({version})")
   
-  # Read the DSD with error handling
-  dsd <- tryCatch({
-    rsdmx::readSDMX(dsd_url)
+  # Auto-detect endpoint if not provided
+  if (is.null(endpoint)) {
+    endpoint <- auto_detect_endpoint(agency_id)
+    if (!is.null(endpoint)) {
+      cli::cli_inform("Auto-detected endpoint: {endpoint$name}")
+    } else {
+      cli::cli_warn("Could not auto-detect endpoint for agency: {agency_id}")
+    }
+  }
+  
+  # Get dataflow structure using sdmxdata
+  dfs <- tryCatch({
+    sdmxdata::get_dataflow_structure(
+      endpoint = endpoint,
+      agencyID = agency_id,
+      id = dataflow_id,
+      version = version,
+      cache = cache
+    )
   }, error = function(e) {
     cli::cli_abort(c(
-      "Failed to read SDMX DSD from URL",
+      "Failed to get SDMX dataflow structure",
       "x" = "Error: {e$message}",
-      "i" = "Check URL validity and network connection"
+      "i" = "Check endpoint, agency ID, and dataflow ID",
+      "i" = "Available endpoints: {paste(sdmxdata::endpoints$id, collapse = ', ')}"
     ))
   })
   
-  if (length(dsd@datastructures) == 0) {
-    cli::cli_abort("No data structures found in the DSD")
+  # Extract dimensions
+  dimensions <- if (length(dfs$dimensions) > 0) {
+    purrr::map_dfr(dfs$dimensions, ~ {
+      tibble::tibble(
+        id = .x$id %||% NA_character_,
+        name = .x$name %||% NA_character_,
+        description = .x$description %||% NA_character_,
+        position = .x$position %||% NA_integer_,
+        type = .x$type %||% NA_character_,
+        role = .x$role %||% NA_character_,
+        codes = list(.x$codes)
+      )
+    })
+  } else {
+    tibble::tibble(
+      id = character(), name = character(), description = character(),
+      position = integer(), type = character(), role = character(),
+      codes = list()
+    )
   }
   
-  ds <- dsd@datastructures[[1]]
+  # Extract attributes
+  attributes <- if (length(dfs$attributes) > 0) {
+    purrr::map_dfr(dfs$attributes, ~ {
+      tibble::tibble(
+        id = .x$id %||% NA_character_,
+        name = .x$name %||% NA_character_,
+        description = .x$description %||% NA_character_,
+        text_format = .x$text_format %||% NA_character_,
+        codes = list(.x$codes)
+      )
+    })
+  } else {
+    tibble::tibble(
+      id = character(), name = character(), 
+      description = character(), text_format = character(),
+      codes = list()
+    )
+  }
   
-  # Extract dimensions safely
-  dimensions <- tryCatch({
-    dims <- ds@DataStructureComponents@DimensionList@Dimension
-    if (length(dims) > 0) {
-      purrr::map_dfr(dims, ~ {
-        tibble::tibble(
-          id = .x@id %||% NA_character_,
-          concept_ref = .x@conceptRef %||% NA_character_,
-          codelist = if (!is.null(.x@LocalRepresentation)) {
-            .x@LocalRepresentation@Enumeration %||% NA_character_
-          } else {
-            NA_character_
-          },
-          position = .x@position %||% NA_integer_
-        )
-      })
-    } else {
-      tibble::tibble(id = character(), concept_ref = character(), 
-                    codelist = character(), position = integer())
-    }
-  }, error = function(e) {
-    cli::cli_warn("Could not extract dimensions: {e$message}")
-    tibble::tibble(id = character(), concept_ref = character(), 
-                  codelist = character(), position = integer())
-  })
-  
-  # Extract attributes safely
-  attributes <- tryCatch({
-    attrs <- ds@DataStructureComponents@AttributeList
-    if (length(attrs) > 0 && length(attrs@Attribute) > 0) {
-      purrr::map_dfr(attrs@Attribute, ~ {
-        tibble::tibble(
-          id = .x@id %||% NA_character_,
-          concept_ref = .x@conceptRef %||% NA_character_,
-          attachment_level = .x@attachmentLevel %||% NA_character_,
-          codelist = if (!is.null(.x@LocalRepresentation)) {
-            .x@LocalRepresentation@Enumeration %||% NA_character_
-          } else {
-            NA_character_
-          }
-        )
-      })
-    } else {
-      tibble::tibble(id = character(), concept_ref = character(),
-                    attachment_level = character(), codelist = character())
-    }
-  }, error = function(e) {
-    cli::cli_warn("Could not extract attributes: {e$message}")
-    tibble::tibble(id = character(), concept_ref = character(),
-                  attachment_level = character(), codelist = character())
-  })
-  
-  # Extract measures safely
-  measures <- tryCatch({
-    meas <- ds@DataStructureComponents@MeasureList
-    if (length(meas) > 0 && length(meas@Measure) > 0) {
-      purrr::map_dfr(meas@Measure, ~ {
-        tibble::tibble(
-          id = .x@id %||% NA_character_,
-          concept_ref = .x@conceptRef %||% NA_character_
-        )
-      })
-    } else {
-      tibble::tibble(id = character(), concept_ref = character())
-    }
-  }, error = function(e) {
-    cli::cli_warn("Could not extract measures: {e$message}")
-    tibble::tibble(id = character(), concept_ref = character())
-  })
+  # Extract measures
+  measures <- if (!is.null(dfs$measure)) {
+    tibble::tibble(
+      id = dfs$measure$id %||% NA_character_,
+      name = dfs$measure$name %||% NA_character_,
+      description = dfs$measure$description %||% NA_character_,
+      text_format = dfs$measure$text_format %||% NA_character_
+    )
+  } else {
+    tibble::tibble(
+      id = character(), name = character(), 
+      description = character(), text_format = character()
+    )
+  }
   
   structure(
     list(
-      dsd_url = dsd_url,
-      dsd_id = ds@id %||% "unknown",
-      agency_id = ds@agencyID %||% "unknown",
-      version = ds@version %||% "1.0",
+      endpoint = endpoint,
+      dsd_id = dfs$id,
+      agency_id = dfs$agencyID,
+      version = dfs$version,
+      name = dfs$name,
+      description = dfs$description,
       dimensions = dimensions,
       attributes = attributes,
       measures = measures,
-      extracted_at = Sys.time()
+      extracted_at = Sys.time(),
+      raw_structure = dfs
     ),
     class = "llmx_sdmx_metadata"
   )
@@ -148,8 +181,14 @@ extract_dsd_metadata <- function(dsd_url, cache = TRUE) {
 #' @export
 #' @examples
 #' \dontrun{
-#' source_meta <- extract_dsd_metadata("source_dsd_url")
-#' target_meta <- extract_dsd_metadata("target_dsd_url") 
+#' source_meta <- extract_dsd_metadata(
+#'   endpoint = "https://stats-sdmx-disseminate.pacificdata.org/rest",
+#'   agency_id = "SPC", dataflow_id = "DF_TRADE_FOOD", version = "2.0"
+#' )
+#' target_meta <- extract_dsd_metadata(
+#'   endpoint = "https://stats-sdmx-disseminate.pacificdata.org/rest", 
+#'   agency_id = "SPC", dataflow_id = "DF_CPI", version = "1.0"
+#' )
 #' comparison <- compare_sdmx_structures(source_meta, target_meta)
 #' print(comparison$dimensions)
 #' }

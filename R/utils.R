@@ -5,9 +5,12 @@
 # Global variables to avoid R CMD check notes
 utils::globalVariables(c(".", "agencyID", "version", "name", "description", "id"))
 
-#' Check if required API keys are available
+#' @importFrom stats setNames
+NULL
+
+#' Check if OpenAI API key is available (legacy function)
 #' @keywords internal
-check_api_keys <- function() {
+check_openai_api_key <- function() {
   openai_key <- Sys.getenv("OPENAI_API_KEY")
   if (openai_key == "") {
     cli::cli_abort(c(

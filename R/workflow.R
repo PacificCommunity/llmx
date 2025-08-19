@@ -30,6 +30,8 @@ WORKFLOW_STATUS <- list(
 #' @param enable_llm_generation Logical. Enable LLM-powered script generation
 #' @param enable_validation Logical. Enable data validation
 #' @param enable_advanced_mapping Logical. Enable advanced mapping inference
+#' @param performance_mode Logical. Enable performance optimizations for large datasets (default: FALSE)
+#' @param strict_validation Logical. Enable strict validation mode with enhanced checks (default: FALSE)
 #'
 #' @return Workflow configuration object
 #' @export
@@ -542,14 +544,23 @@ execute_script_generation_step <- function(workflow, step_name) {
   target_schema <- workflow$intermediate_data$target_schema
   mapping_result <- workflow$intermediate_data$mapping_result
   
+  # Create LLM config from workflow settings
+  llm_config <- create_llm_config(
+    provider = workflow$config$llm_provider %||% "ollama",
+    model = workflow$config$llm_model %||% "llama2"
+  )
+  
   # Generate transformation script using existing LLM functionality
-  generated_script <- generate_mapping_script(
+  response <- generate_mapping_script(
     source_profile,
     target_schema,
+    llm_config = llm_config,
     mapping_type = "auto",
-    model = workflow$config$llm_model,
     include_validation = workflow$config$enable_validation
   )
+  
+  # Extract the script from the response
+  generated_script <- trim_script(response)
   
   # Store results
   workflow$intermediate_data$generated_script <- generated_script
@@ -896,7 +907,7 @@ generate_mapping_report <- function(mapping_result, source_profile) {
       ""
     )
     for (rec in mapping_result$recommendations) {
-      report_lines <- c(report_lines, paste("•", rec))
+      report_lines <- c(report_lines, paste("\u2022", rec))
     }
   }
   
@@ -944,10 +955,10 @@ print.llmx_workflow_result <- function(x, ...) {
   for (step_name in step_names) {
     step <- x$steps[[step_name]]
     status_symbol <- switch(step$status,
-                           "completed" = "✅",
-                           "failed" = "❌", 
-                           "skipped" = "⏸️",
-                           "⏳")
+                           "completed" = "\u2705",
+                           "failed" = "\u274c", 
+                           "skipped" = "\u23f8\ufe0f",
+                           "\u23f3")
     cli::cli_text("{status_symbol} {step$step_name} ({step$status})")
   }
   
@@ -961,7 +972,7 @@ print.llmx_workflow_result <- function(x, ...) {
   if (length(x$recommendations) > 0) {
     cli::cli_h2("Recommendations")
     for (rec in x$recommendations) {
-      cli::cli_text("• {rec}")
+      cli::cli_text("\u2022 {rec}")
     }
   }
   

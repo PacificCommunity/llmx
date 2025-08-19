@@ -800,7 +800,7 @@ print.llmx_advanced_mapping_result <- function(x, ...) {
   if (length(x$recommendations) > 0) {
     cli::cli_h2("Recommendations")
     for (rec in x$recommendations) {
-      cli::cli_text("• {rec}")
+      cli::cli_text("\u2022 {rec}")
     }
   }
   

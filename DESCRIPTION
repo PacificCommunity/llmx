@@ -2,16 +2,16 @@ Package: llmx
 Title: LLM-Powered SDMX Data Transformation and Mapping
 Version: 0.1.0
 Authors@R: 
-    person("Your", "Name", , "your.email@example.com", role = c("aut", "cre"),
-           comment = c(ORCID = "YOUR-ORCID-ID"))
+    person("Dalla Riva", "Giulio Valentino", , "giuliodr@spc.int", role = c("aut", "cre"),
+           comment = c(ORCID = "0000-0002-3454-0633"))
 Description: A comprehensive R package for transforming diverse data sources (CSV, Excel, etc.) 
     into SDMX-CSV format using Large Language Models (LLMs). Features include advanced 
     mapping inference with fuzzy matching, workflow orchestration, multiple LLM provider 
-    support (OpenAI, Anthropic, Ollama, Azure OpenAI), sophisticated data profiling, 
+    support (OpenAI, Anthropic, Ollama, Azure OpenAI, Gemini), sophisticated data profiling, 
     and intelligent value transformation suggestions for statistical data exchange workflows.
 License: MIT + file LICENSE
-URL: https://github.com/yourusername/llmx
-BugReports: https://github.com/yourusername/llmx/issues
+URL: https://github.com/PacificCommunity/llmx
+BugReports: https://github.com/PacificCommunity/llmx/issues
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
@@ -22,7 +22,6 @@ Imports:
     cli (>= 3.6.0),
     dplyr (>= 1.1.0),
     ellmer (>= 0.1.0),
-    fs (>= 1.6.0),
     glue (>= 1.7.0),
     httr2 (>= 1.0.0),
     jsonlite (>= 1.8.0),
@@ -30,18 +29,26 @@ Imports:
     readr (>= 2.1.0),
     readxl (>= 1.4.0),
     rlang (>= 1.1.0),
-    rsdmx (>= 2.3.0),
-    scales (>= 1.2.0),
     sdmxdata (>= 0.1.0),
     stringr (>= 1.5.0),
     tibble (>= 3.2.0),
     tidyr (>= 1.3.0),
-    tools,
-    vctrs (>= 0.6.0),
-    withr (>= 2.5.0)
+    tools
 Suggests: 
     covr,
     knitr,
+    openxlsx,
     rmarkdown,
     testthat (>= 3.0.0)
 VignetteBuilder: knitr
+Collate: 
+    'env_utils.R'
+    'utils.R'
+    'llm_providers.R'
+    'data_analysis.R'
+    'sdmx_structure.R'
+    'llm_mapping.R'
+    'validation.R'
+    'workflow.R'
+    'advanced_mapping.R'
+    'value_transformations.R'

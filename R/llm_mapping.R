@@ -1,40 +1,37 @@
-#' Generate Data Mapping Script Using LLM
+
+#' Generate SDMX Mapping Script Using LLM
 #'
 #' Uses a Large Language Model to generate R code for mapping data from
-#' various formats (CSV, Excel) to SDMX-CSV format based on data analysis
-#' and target SDMX structure.
+#' various formats to SDMX-CSV format based on data analysis and target SDMX structure.
 #'
 #' @param data_analysis Result from `analyze_data_structure()`
 #' @param target_sdmx Target SDMX metadata from `extract_dsd_metadata()`
+#' @param llm_config LLM configuration from `create_llm_config()`
 #' @param mapping_type Character. Type of mapping: "simple", "complex", or "auto" (default)
-#' @param model Character. LLM model to use (default: "gpt-4")
 #' @param include_validation Logical. Include data validation in generated script (default: TRUE)
-#' @param output_file Character. Optional file path to save generated script
+#' @param verbose Logical. Print detailed prompts and intermediate steps (default: FALSE)
 #'
-#' @return Character string containing the generated R script
-#'
+#' @return Character string containing the full LLM response
 #' @export
 #' @examples
 #' \dontrun{
-#' # Analyze source data
-#' data_analysis <- analyze_data_structure("my_data.csv")
-#' 
-#' # Get target SDMX structure  
-#' target_sdmx <- extract_dsd_metadata("https://example.org/dsd")
-#' 
 #' # Generate mapping script
-#' script <- generate_mapping_script(data_analysis, target_sdmx)
-#' cat(script)
+#' config <- create_llm_config("gemini", "gemini-2.5-flash-lite")
+#' full_response <- generate_mapping_script(data_analysis, target_sdmx, config)
+#' 
+#' # Extract just the R code
+#' r_code <- trim_script(full_response)
 #' }
 generate_mapping_script <- function(data_analysis,
                                    target_sdmx,
+                                   llm_config,
                                    mapping_type = c("auto", "simple", "complex"),
-                                   model = "gpt-4",
                                    include_validation = TRUE,
-                                   output_file = NULL) {
+                                   verbose = FALSE) {
   
-  check_api_keys()
-  check_packages("ellmer")
+  if (!inherits(llm_config, "llmx_llm_config")) {
+    cli::cli_abort("llm_config must be created with {.fn create_llm_config}")
+  }
   
   mapping_type <- match.arg(mapping_type)
   
@@ -64,38 +61,36 @@ generate_mapping_script <- function(data_analysis,
   # Create detailed user prompt
   user_prompt <- create_mapping_prompt(data_analysis, target_sdmx, mapping_type)
   
-  cli::cli_inform("Generating mapping script with {.val {model}}...")
+  cli::cli_inform("Generating mapping script with {.val {llm_config$provider}}...")
+  
+  # Print prompts if verbose mode is enabled
+  if (verbose) {
+    cli::cli_h2("VERBOSE MODE: System Prompt")
+    cat(system_prompt, "\n\n")
+    cli::cli_h2("VERBOSE MODE: User Prompt")
+    cat(user_prompt, "\n\n")
+    cli::cli_rule("Sending to LLM...")
+  }
   
   # Generate code using LLM
   tryCatch({
-    chat <- ellmer::chat_openai(
-      system_prompt = system_prompt,
-      model = model,
-      temperature = 0.1  # Low temperature for more consistent code generation
-    )
+    response <- query_llm(llm_config, system_prompt, user_prompt)
     
-    response <- chat$chat(user_prompt)
-    
-    # Extract R code from response
-    script_code <- extract_code_from_response(response)
-    
-    # Add header and metadata
-    final_script <- create_complete_script(script_code, data_analysis, target_sdmx)
-    
-    # Save to file if requested
-    if (!is.null(output_file)) {
-      readr::write_file(final_script, output_file)
-      cli::cli_inform("Mapping script saved to: {.path {output_file}}")
+    if (verbose) {
+      cli::cli_h2("VERBOSE MODE: Raw LLM Response")
+      cat("Response length:", nchar(response), "characters\n")
+      cat("First 1000 characters:\n")
+      cat(substr(response, 1, 1000), "\n...\n\n")
     }
     
-    cli::cli_inform("✓ Mapping script generated successfully")
-    return(final_script)
+    cli::cli_inform("\u2713 LLM response received successfully")
+    return(response)
     
   }, error = function(e) {
     cli::cli_abort(c(
       "Failed to generate mapping script",
       "x" = "Error: {e$message}",
-      "i" = "Check your API key and internet connection"
+      "i" = "Check your {llm_config$provider} configuration and connection"
     ))
   })
 }
@@ -107,6 +102,12 @@ create_system_prompt <- function(mapping_type, include_validation) {
   base_prompt <- "You are an expert R programmer specializing in statistical data transformation and SDMX standards. 
   
 Your task is to generate clean, efficient, and well-documented R code that transforms source data into SDMX-CSV format.
+
+IMPORTANT OUTPUT FORMAT:
+- Respond with ONLY the R code and necessary comments
+- Do NOT include thinking process, explanations, or reasoning tags like <think>, <thinking>, etc.
+- Do NOT include introductory text like 'Here is the code:' or similar
+- Start directly with the R function definition
 
 Key requirements:
 - Use modern tidyverse functions and the native pipe operator |>
@@ -139,7 +140,7 @@ create_mapping_prompt <- function(data_analysis, target_sdmx, mapping_type) {
   SOURCE DATA ANALYSIS:
   File: {data_analysis$file_path}
   Type: {data_analysis$file_type} 
-  Dimensions: {data_analysis$n_rows} rows × {data_analysis$n_cols} columns
+  Dimensions: {data_analysis$n_rows} rows \u00d7 {data_analysis$n_cols} columns
   
   Column Information:
   {format_columns_for_prompt(data_analysis$columns)}
@@ -240,20 +241,62 @@ format_sdmx_components_for_prompt <- function(components_df, type) {
 #' Extract R code from LLM response
 #' @keywords internal
 extract_code_from_response <- function(response) {
+  # Clean the response
+  cleaned_response <- response
+  
+  # Remove thinking tags if they exist
+  if (grepl("<think>", cleaned_response, ignore.case = TRUE)) {
+    cleaned_response <- stringr::str_replace_all(cleaned_response, "(?si)<think>.*?</think>", "")
+  }
+  
+  if (grepl("<thinking>", cleaned_response, ignore.case = TRUE)) {
+    cleaned_response <- stringr::str_replace_all(cleaned_response, "(?si)<thinking>.*?</thinking>", "")
+  }
+  
   # Try to extract code block first
   code_pattern <- "```r\\n(.*?)\\n```"
-  code_match <- stringr::str_extract(response, code_pattern)
+  code_match <- stringr::str_extract(cleaned_response, code_pattern)
   
   if (!is.na(code_match)) {
     # Remove code block markers
     code <- stringr::str_replace_all(code_match, "```r\\n|\\n```", "")
   } else {
-    # If no code blocks, assume entire response is code
-    code <- response
+    # Try alternative code block patterns
+    alt_patterns <- c(
+      "```R\\n(.*?)\\n```",
+      "```\\n(.*?)\\n```"
+    )
+    
+    code <- NULL
+    for (pattern in alt_patterns) {
+      code_match <- stringr::str_extract(cleaned_response, pattern)
+      if (!is.na(code_match)) {
+        code <- stringr::str_replace_all(code_match, "```[rR]?\\n|\\n```", "")
+        break
+      }
+    }
+    
+    # If still no code blocks found, try to extract function definitions
+    if (is.null(code)) {
+      # Look for function definitions
+      func_pattern <- "(transform_to_sdmx_csv\\s*<-\\s*function.*?)(?=\\n\\n|$)"
+      func_match <- stringr::str_extract(cleaned_response, func_pattern)
+      
+      if (!is.na(func_match)) {
+        code <- func_match
+      } else {
+        # Last resort: use the cleaned response
+        code <- cleaned_response
+      }
+    }
   }
   
   # Clean up the code
   code <- stringr::str_trim(code)
+  
+  # Remove any remaining artifacts
+  code <- stringr::str_replace_all(code, "^Here's.*?:\\s*", "")
+  code <- stringr::str_replace_all(code, "^.*?Here is.*?:\\s*", "")
   
   if (nchar(code) == 0) {
     cli::cli_abort("No R code found in LLM response")
@@ -262,9 +305,109 @@ extract_code_from_response <- function(response) {
   code
 }
 
-#' Create complete script with header and metadata
+#' Extract R Code from LLM Response
+#'
+#' Extracts R code from LLM response, removing markdown code blocks and other formatting.
+#'
+#' @param response Character. The full LLM response
+#' @param add_header Logical. Whether to add header and footer (default: TRUE)
+#' @param data_analysis Optional. Data analysis object for header metadata
+#' @param target_sdmx Optional. Target SDMX metadata for header
+#' @param llm_config Optional. LLM config for header
+#' @param output_file Character. Optional file path to save trimmed script
+#'
+#' @return Character string containing extracted R code
+#' @export
+#' @examples
+#' \dontrun{
+#' # Get full response from LLM
+#' response <- generate_mapping_script(data_analysis, target_sdmx, config)
+#' 
+#' # Extract just the R code
+#' r_code <- trim_script(response)
+#' 
+#' # Or with header and save to file
+#' script <- trim_script(response, 
+#'                      add_header = TRUE,
+#'                      data_analysis = data_analysis,
+#'                      target_sdmx = target_sdmx,
+#'                      llm_config = config,
+#'                      output_file = "transform.R")
+#' }
+trim_script <- function(response, 
+                       add_header = TRUE,
+                       data_analysis = NULL,
+                       target_sdmx = NULL, 
+                       llm_config = NULL,
+                       output_file = NULL) {
+  
+  # Extract R code using multiple patterns
+  code_patterns <- c(
+    "```[rR]\\s*\\n([\\s\\S]*?)\\n```",  # ```r or ```R with content
+    "```\\s*\\n([\\s\\S]*?)\\n```"       # ``` with content
+  )
+  
+  extracted_code <- NULL
+  for (pattern in code_patterns) {
+    matches <- stringr::str_match(response, pattern)
+    if (!is.na(matches[1])) {
+      # Extract the captured group (the actual code)
+      extracted_code <- matches[2]
+      break
+    }
+  }
+  
+  # If no code blocks found, try to extract function definitions
+  if (is.null(extracted_code)) {
+    # Look for function definitions directly
+    func_pattern <- "(transform_to_sdmx_csv\\s*<-\\s*function[\\s\\S]*)"
+    func_match <- stringr::str_match(response, func_pattern)
+    
+    if (!is.na(func_match[1])) {
+      extracted_code <- func_match[2]
+    } else {
+      # Last resort: clean the entire response
+      extracted_code <- response
+      # Remove obvious non-code content
+      extracted_code <- stringr::str_replace_all(extracted_code, "(?i)here\\s+(is|are)\\s+.*?:", "")
+      extracted_code <- stringr::str_replace_all(extracted_code, "(?i)this\\s+(function|code)\\s+.*?:", "")
+    }
+  }
+  
+  # Clean up the extracted code
+  if (!is.null(extracted_code)) {
+    # Remove thinking tags if present
+    extracted_code <- stringr::str_replace_all(extracted_code, "(?si)<think>.*?</think>", "")
+    extracted_code <- stringr::str_replace_all(extracted_code, "(?si)<thinking>.*?</thinking>", "")
+    
+    # Trim whitespace
+    extracted_code <- stringr::str_trim(extracted_code)
+  }
+  
+  # Add header and footer if requested
+  if (add_header && !is.null(data_analysis) && !is.null(target_sdmx) && !is.null(llm_config)) {
+    final_script <- create_complete_script(extracted_code, data_analysis, target_sdmx, llm_config)
+  } else {
+    final_script <- extracted_code
+  }
+  
+  # Save to file if requested
+  if (!is.null(output_file)) {
+    writeLines(final_script, output_file)
+    cli::cli_inform("Trimmed script saved to: {.path {output_file}}")
+  }
+  
+  if (is.null(extracted_code) || nchar(stringr::str_trim(extracted_code)) == 0) {
+    cli::cli_warn("No R code found in response. Returning original response.")
+    return(response)
+  }
+  
+  return(final_script)
+}
+
+#' Create simple script with basic header (legacy)
 #' @keywords internal
-create_complete_script <- function(script_code, data_analysis, target_sdmx) {
+create_simple_script <- function(script_code, data_analysis, target_sdmx) {
   
   header <- glue::glue("
   # SDMX Data Transformation Script
