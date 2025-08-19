@@ -722,6 +722,216 @@ generate_mapping_recommendations <- function(mappings, coverage_analysis, source
   return(recommendations)
 }
 
+#' Generate Codelist Value Mapping Script
+#'
+#' Uses LLM to generate R code for mapping specific data column values to SDMX codelist codes.
+#' This is a focused approach that targets value transformation rather than full structure mapping.
+#'
+#' @param source_values Vector of unique values from the source data column
+#' @param target_codelist Data frame with codelist containing code_id and optional name/description columns
+#' @param source_column_name Character. Name of the source column for context
+#' @param target_codelist_name Character. Name/ID of the target codelist
+#' @param llm_config LLM configuration from `create_llm_config()`
+#' @param matching_threshold Numeric. Minimum similarity threshold for automatic matching (0-1, default: 0.7)
+#' @param include_fuzzy_matching Logical. Include fuzzy matching logic in generated script (default: TRUE)
+#' @param verbose Logical. Print detailed information (default: FALSE)
+#'
+#' @return Character string containing R code for value mapping
+#' @export
+#' @examples
+#' \dontrun{
+#' # Example: Map country names to ISO codes
+#' source_values <- c("United States", "Canada", "Mexico")
+#' target_codelist <- data.frame(
+#'   code_id = c("US", "CA", "MX"),
+#'   name = c("United States", "Canada", "Mexico")
+#' )
+#' 
+#' config <- create_llm_config("ollama", "llama2")
+#' mapping_script <- generate_codelist_value_mapping(
+#'   source_values, target_codelist, "country_name", "ISO_COUNTRY", config
+#' )
+#' cat(mapping_script)
+#' }
+generate_codelist_value_mapping <- function(source_values,
+                                           target_codelist,
+                                           source_column_name,
+                                           target_codelist_name,
+                                           llm_config,
+                                           matching_threshold = 0.7,
+                                           include_fuzzy_matching = TRUE,
+                                           verbose = FALSE) {
+  
+  if (!inherits(llm_config, "llmx_llm_config")) {
+    cli::cli_abort("llm_config must be created with {.fn create_llm_config}")
+  }
+  
+  # Validate inputs
+  if (length(source_values) == 0) {
+    cli::cli_abort("source_values cannot be empty")
+  }
+  
+  if (!is.data.frame(target_codelist) || nrow(target_codelist) == 0) {
+    cli::cli_abort("target_codelist must be a non-empty data frame")
+  }
+  
+  if (!"code_id" %in% names(target_codelist)) {
+    cli::cli_abort("target_codelist must have a 'code_id' column")
+  }
+  
+  # Get unique non-missing source values
+  clean_source_values <- unique(source_values[!is.na(source_values) & source_values != ""])
+  
+  if (length(clean_source_values) == 0) {
+    cli::cli_abort("No valid source values found after cleaning")
+  }
+  
+  # Perform initial analysis to provide context to LLM
+  value_analysis <- analyze_value_patterns(clean_source_values, target_codelist)
+  
+  # Create system prompt for value mapping
+  system_prompt <- create_value_mapping_system_prompt(include_fuzzy_matching)
+  
+  # Create detailed user prompt
+  user_prompt <- create_value_mapping_prompt(
+    clean_source_values, 
+    target_codelist, 
+    source_column_name, 
+    target_codelist_name,
+    value_analysis,
+    matching_threshold
+  )
+  
+  cli::cli_inform("Generating value mapping script with {.val {llm_config$provider}}...")
+  
+  if (verbose) {
+    cli::cli_h2("VERBOSE MODE: System Prompt")
+    cat(system_prompt, "\n\n")
+    cli::cli_h2("VERBOSE MODE: User Prompt")
+    cat(user_prompt, "\n\n")
+    cli::cli_rule("Sending to LLM...")
+  }
+  
+  # Generate mapping script using LLM
+  tryCatch({
+    response <- query_llm(llm_config, system_prompt, user_prompt)
+    
+    if (verbose) {
+      cli::cli_h2("VERBOSE MODE: Raw LLM Response")
+      cat("Response length:", nchar(response), "characters\n")
+      cat("First 1000 characters:\n")
+      cat(substr(response, 1, 1000), "\n...\n\n")
+    }
+    
+    # Extract R code from response
+    mapping_script <- extract_code_from_response(response)
+    
+    cli::cli_inform("\u2713 Value mapping script generated successfully")
+    return(mapping_script)
+    
+  }, error = function(e) {
+    cli::cli_abort(c(
+      "Failed to generate value mapping script",
+      "x" = "Error: {e$message}",
+      "i" = "Check your {llm_config$provider} configuration and connection"
+    ))
+  })
+}
+
+#' Create system prompt for value mapping
+#' @keywords internal
+create_value_mapping_system_prompt <- function(include_fuzzy_matching) {
+  
+  base_prompt <- "You are an expert R programmer specializing in data value mapping and harmonization for statistical data processing.
+
+Your task is to generate clean, efficient R code that maps source data values to target codelist codes.
+
+IMPORTANT OUTPUT FORMAT:
+- Respond with ONLY the R code and necessary comments
+- Do NOT include thinking process, explanations, or reasoning tags
+- Do NOT include introductory text
+- Start directly with the R function definition
+
+Key requirements:
+- Create a function called `map_values_to_codelist` that takes a vector of source values and returns mapped codes
+- Use vectorized operations for efficiency
+- Handle missing values appropriately (return NA for unmappable values)
+- Include clear comments explaining the mapping logic
+- Use exact matching first, then fallback methods as needed
+- Return the original value with a warning if no mapping is found"
+
+  fuzzy_addition <- if (include_fuzzy_matching) {
+    "\n\nInclude fuzzy matching capabilities:
+- Use string similarity algorithms for approximate matching
+- Apply reasonable similarity thresholds
+- Prioritize exact matches over fuzzy matches
+- Include confidence scoring for fuzzy matches"
+  } else {
+    ""
+  }
+  
+  paste0(base_prompt, fuzzy_addition)
+}
+
+#' Create value mapping prompt
+#' @keywords internal
+create_value_mapping_prompt <- function(source_values, target_codelist, source_col_name, 
+                                       target_codelist_name, analysis, threshold) {
+  
+  # Format source values for prompt
+  source_vals_str <- if (length(source_values) <= 20) {
+    paste0("c(\"", paste(source_values, collapse = "\", \""), "\")")
+  } else {
+    paste0("c(\"", paste(source_values[1:20], collapse = "\", \""), "\", ...) # ", 
+           length(source_values), " total unique values")
+  }
+  
+  # Format target codelist for prompt
+  codelist_preview <- if (nrow(target_codelist) <= 10) {
+    utils::capture.output(print(target_codelist, n = nrow(target_codelist)))
+  } else {
+    utils::capture.output(print(head(target_codelist, 10)))
+  }
+  codelist_str <- paste(codelist_preview, collapse = "\n")
+  
+  # Include analysis insights
+  analysis_str <- glue::glue("
+  Initial Analysis:
+  - Exact matches found: {analysis$exact_matches}
+  - Fuzzy matches found: {analysis$fuzzy_matches}  
+  - Unmatched values: {analysis$unmatched}
+  - Overall confidence: {round(analysis$confidence_score * 100, 1)}%
+  ")
+  
+  # Create main prompt
+  main_prompt <- glue::glue("
+  Generate a complete R function that maps values from '{source_col_name}' to codes in '{target_codelist_name}'.
+  
+  SOURCE VALUES TO MAP:
+  {source_vals_str}
+  
+  TARGET CODELIST:
+  {codelist_str}
+  
+  {analysis_str}
+  
+  REQUIREMENTS:
+  1. Function should be named 'map_values_to_codelist'
+  2. Take a vector of source values as input
+  3. Return a vector of corresponding codelist codes
+  4. Handle exact matches first
+  5. Use fuzzy matching with threshold {threshold} for approximate matches
+  6. Return NA for values that cannot be mapped
+  7. Include informative comments
+  8. Add validation to ensure robust operation
+  
+  The function should be production-ready and handle edge cases gracefully.
+  Return only the R code.
+  ")
+  
+  main_prompt
+}
+
 #' Learn from User Feedback
 #'
 #' Incorporates user feedback to improve future mapping suggestions.

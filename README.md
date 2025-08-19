@@ -1,7 +1,7 @@
 # llmx: LLM-Powered SDMX Data Transformation
 
-[![R-CMD-check](https://github.com/yourusername/llmx/workflows/R-CMD-check/badge.svg)](https://github.com/yourusername/llmx/actions)
-[![Codecov test coverage](https://codecov.io/gh/yourusername/llmx/branch/main/graph/badge.svg)](https://codecov.io/gh/yourusername/llmx?branch=main)
+[![R-CMD-check](https://github.com/pacificcommunit/llmx/workflows/R-CMD-check/badge.svg)](https://github.com/pacificcommunit/llmx/actions)
+[![Codecov test coverage](https://codecov.io/gh/pacificcommunit/llmx/branch/main/graph/badge.svg)](https://codecov.io/gh/pacificcommunit/llmx?branch=main)
 
 A modern R package for transforming diverse data sources (CSV, Excel, etc.) into SDMX-CSV format using Large Language Models (LLMs). Provides intelligent mapping suggestions, automated script generation, and comprehensive validation for statistical data exchange workflows.
 
@@ -18,7 +18,7 @@ A modern R package for transforming diverse data sources (CSV, Excel, etc.) into
 ```r
 # Install from GitHub (development version)
 # install.packages("devtools")
-devtools::install_github("yourusername/llmx")
+devtools::install_github("pacificcommunit/llmx")
 
 # Or install from CRAN (when available)
 install.packages("llmx")
@@ -26,9 +26,18 @@ install.packages("llmx")
 
 ## Prerequisites
 
-1. **OpenAI API Key**: Set your API key for LLM-powered features:
+1. **LLM Provider**: The package supports multiple LLM providers:
+   - **Ollama** (recommended fallback): Install locally for free usage
+   - **OpenAI**: Set API key for cloud-based models
+   - **Anthropic Claude**: Alternative cloud provider
+   - **Other providers**: See configuration section
+   
    ```r
+   # For OpenAI (optional)
    Sys.setenv(OPENAI_API_KEY = "your-api-key-here")
+   
+   # For Ollama (free, local fallback)
+   # Install Ollama from https://ollama.ai and run: ollama serve
    ```
 
 2. **Required packages**: The package will prompt you to install missing dependencies.
@@ -97,6 +106,7 @@ validate_sdmx_csv(sdmx_data, sdmx_meta)
 | `extract_dsd_metadata()` | Extract SDMX Data Structure Definition metadata |
 | `suggest_sdmx_mapping()` | Generate intelligent mapping suggestions |
 | `generate_mapping_script()` | Create LLM-generated transformation code |
+| `generate_codelist_value_mapping()` | Generate code to map data values to codelist codes |
 | `validate_sdmx_csv()` | Validate data against SDMX specifications |
 
 ## Templates
@@ -170,18 +180,56 @@ sdmx_long <- transform_wide_to_sdmx_csv(
 )
 ```
 
+### Map data values to codelist codes
+
+```r
+# Generate mapping script for specific value transformations
+source_values <- c("United States", "Canada", "Mexico", "United Kingdom")
+country_codelist <- data.frame(
+  code_id = c("US", "CA", "MX", "GB"),
+  name = c("United States", "Canada", "Mexico", "United Kingdom")
+)
+
+config <- create_llm_config("ollama", "llama2")  # Using Ollama fallback
+mapping_script <- generate_codelist_value_mapping(
+  source_values = source_values,
+  target_codelist = country_codelist,
+  source_column_name = "country_name",
+  target_codelist_name = "ISO_COUNTRY_CODES",
+  llm_config = config
+)
+
+# Review and execute the generated mapping function
+cat(mapping_script)
+eval(parse(text = mapping_script))
+
+# Use the generated function
+mapped_codes <- map_values_to_codelist(c("United States", "Canada"))
+print(mapped_codes)  # Should return c("US", "CA")
+```
+
 ## Configuration
 
 ### LLM Settings
 
 ```r
-# Use different models or settings
+# Use different providers and models
 script <- generate_mapping_script(
   analysis, 
   sdmx_meta,
-  model = "gpt-3.5-turbo",  # Faster, cheaper option
+  provider = "ollama",       # Use local Ollama (fallback)
+  model = "llama2",          # Free local model
   mapping_type = "simple",   # For straightforward mappings
   include_validation = TRUE  # Include data validation code
+)
+
+# Or use cloud providers
+script <- generate_mapping_script(
+  analysis, 
+  sdmx_meta,
+  provider = "openai",       # Cloud option
+  model = "gpt-3.5-turbo",   # Faster, cheaper cloud option
+  mapping_type = "complex"   # For advanced transformations
 )
 ```
 
