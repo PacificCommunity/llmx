@@ -1,7 +1,7 @@
 # llmx: LLM-Powered SDMX Data Transformation
 
-[![R-CMD-check](https://github.com/pacificcommunit/llmx/workflows/R-CMD-check/badge.svg)](https://github.com/pacificcommunit/llmx/actions)
-[![Codecov test coverage](https://codecov.io/gh/pacificcommunit/llmx/branch/main/graph/badge.svg)](https://codecov.io/gh/pacificcommunit/llmx?branch=main)
+[![R-CMD-check](https://github.com/PacificCommunity/llmx/workflows/R-CMD-check/badge.svg)](https://github.com/pacificcommunit/llmx/actions)
+[![Codecov test coverage](https://codecov.io/gh/PacificCommunity/llmx/branch/main/graph/badge.svg)](https://codecov.io/gh/pacificcommunit/llmx?branch=main)
 
 A modern R package for transforming diverse data sources (CSV, Excel, etc.) into SDMX-CSV format using Large Language Models (LLMs). Provides intelligent mapping suggestions, automated script generation, and comprehensive validation for statistical data exchange workflows.
 
@@ -18,7 +18,7 @@ A modern R package for transforming diverse data sources (CSV, Excel, etc.) into
 ```r
 # Install from GitHub (development version)
 # install.packages("devtools")
-devtools::install_github("pacificcommunit/llmx")
+devtools::install_github("PacificCommunity/llmx")
 
 # Or install from CRAN (when available)
 install.packages("llmx")
